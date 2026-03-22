@@ -279,7 +279,7 @@ export class SorobanDebugSession extends DebugSession {
     }
   }
 
-  private async runExecution(reason: DebugProtocol.StoppedEvent['reason']): Promise<void> {
+  private async runExecution(reason: 'step' | 'entry' | 'breakpoint' | 'pause'): Promise<void> {
     if (!this.debuggerProcess) {
       throw new Error('Debugger process is not running');
     }

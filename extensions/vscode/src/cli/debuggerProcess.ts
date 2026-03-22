@@ -1,4 +1,4 @@
-import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
@@ -62,7 +62,7 @@ type PendingRequest = {
 };
 
 export class DebuggerProcess {
-  private process: ChildProcessWithoutNullStreams | null = null;
+  private process: ChildProcess | null = null;
   private socket: net.Socket | null = null;
   private buffer = '';
   private requestId = 0;
@@ -83,15 +83,16 @@ export class DebuggerProcess {
     const port = this.config.port ?? await this.findAvailablePort();
     this.port = port;
 
-    this.process = spawn(binaryPath, this.buildArgs(port), {
+    const child = spawn(binaryPath, this.buildArgs(port), {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
         ...(this.config.trace ? { RUST_LOG: 'debug' } : {})
       }
     });
+    this.process = child;
 
-    this.process.once('exit', () => {
+    child.once('exit', () => {
       this.rejectPendingRequests(new Error('Debugger server exited'));
       this.socket?.destroy();
       this.socket = null;
