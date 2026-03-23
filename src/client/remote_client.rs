@@ -183,6 +183,7 @@ impl RemoteClient {
                 step_count,
                 paused,
                 call_stack,
+                ..
             } => Ok((function, step_count, paused, call_stack)),
             DebugResponse::Error { message } => Err(DebuggerError::ExecutionError(message).into()),
             _ => Err(
