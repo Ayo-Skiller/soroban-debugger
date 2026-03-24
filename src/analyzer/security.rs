@@ -972,9 +972,9 @@ mod tests {
         assert!(!ArithmeticCheckRule::is_guarded(&instrs, 1));
     }
 
-    // -----------------------------------------------------------------------
+    
     // Pre-existing tests (unchanged)
-    // -----------------------------------------------------------------------
+    
 
     #[test]
     fn unbounded_iteration_dynamic_flags_high_risk_pattern() {
