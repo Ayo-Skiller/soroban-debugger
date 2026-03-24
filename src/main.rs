@@ -48,7 +48,7 @@ fn handle_deprecations(cli: &mut Cli) {
         Some(Commands::Run(args)) => {
             if let Some(wasm) = args.wasm.take() {
                 print_deprecation_warning("--wasm", "--contract");
-                args.contract = wasm;
+                args.contract = Some(wasm);
             }
             if let Some(snapshot) = args.snapshot.take() {
                 print_deprecation_warning("--snapshot", "--network-snapshot");

@@ -193,13 +193,16 @@ fn display_mock_call_log(calls: &[crate::runtime::executor::MockCallEntry]) {
 
 /// Execute batch mode with parallel execution
 fn run_batch(args: &RunArgs, batch_file: &std::path::Path) -> Result<()> {
-    print_info(format!("Loading contract: {:?}", args.contract));
-    logging::log_loading_contract(&args.contract.to_string_lossy());
+    let contract = args.contract.as_ref().expect("contract is required for batch mode");
+    let function = args.function.as_ref().expect("function is required for batch mode");
 
-    let wasm_bytes = fs::read(&args.contract).map_err(|e| {
+    print_info(format!("Loading contract: {:?}", contract));
+    logging::log_loading_contract(&contract.to_string_lossy());
+
+    let wasm_bytes = fs::read(contract).map_err(|e| {
         DebuggerError::WasmLoadError(format!(
             "Failed to read WASM file at {:?}: {}",
-            args.contract, e
+            contract, e
         ))
     })?;
 
@@ -224,11 +227,11 @@ fn run_batch(args: &RunArgs, batch_file: &std::path::Path) -> Result<()> {
     print_info(format!(
         "\nExecuting {} test cases in parallel for function: {}",
         batch_items.len(),
-        args.function
+        function
     ));
-    logging::log_execution_start(&args.function, None);
+    logging::log_execution_start(function, None);
 
-    let executor = crate::batch::BatchExecutor::new(wasm_bytes, args.function.clone());
+    let executor = crate::batch::BatchExecutor::new(wasm_bytes, function.clone());
     let results = executor.execute_batch(batch_items)?;
     let summary = crate::batch::BatchExecutor::summarize(&results);
 
@@ -263,6 +266,16 @@ fn run_batch(args: &RunArgs, batch_file: &std::path::Path) -> Result<()> {
 /// Execute the run command.
 #[tracing::instrument(skip_all, fields(contract = ?args.contract, function = args.function))]
 pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
+    // Start debug server if requested
+    if args.server {
+        return server(ServerArgs {
+            port: args.port,
+            token: args.token,
+            tls_cert: args.tls_cert,
+            tls_key: args.tls_key,
+        });
+    }
+
     // Initialize output writer
     let mut output_writer = OutputWriter::new(args.save_output.as_deref(), args.append)?;
 
@@ -275,12 +288,15 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
         return run_dry_run(&args);
     }
 
-    print_info(format!("Loading contract: {:?}", args.contract));
-    output_writer.write(&format!("Loading contract: {:?}", args.contract))?;
-    logging::log_loading_contract(&args.contract.to_string_lossy());
+    let contract = args.contract.as_ref().expect("contract is required for run");
+    let function = args.function.as_ref().expect("function is required for run");
 
-    let wasm_file = crate::utils::wasm::load_wasm(&args.contract)
-        .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
+    print_info(format!("Loading contract: {:?}", contract));
+    output_writer.write(&format!("Loading contract: {:?}", contract))?;
+    logging::log_loading_contract(&contract.to_string_lossy());
+
+    let wasm_file = crate::utils::wasm::load_wasm(contract)
+        .with_context(|| format!("Failed to read WASM file: {:?}", contract))?;
     let wasm_bytes = wasm_file.bytes;
     let wasm_hash = wasm_file.sha256_hash;
 
@@ -347,22 +363,22 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     }
 
     if let Some(n) = args.repeat {
-        logging::log_repeat_execution(&args.function, n as usize);
+        logging::log_repeat_execution(function, n as usize);
         let runner = RepeatRunner::new(wasm_bytes, args.breakpoint, initial_storage);
-        let stats = runner.run(&args.function, parsed_args.as_deref(), n)?;
+        let stats = runner.run(function, parsed_args.as_deref(), n)?;
         stats.display();
         return Ok(());
     }
 
     print_info("\nStarting debugger...");
     output_writer.write("Starting debugger...")?;
-    print_info(format!("Function: {}", args.function));
-    output_writer.write(&format!("Function: {}", args.function))?;
+    print_info(format!("Function: {}", function));
+    output_writer.write(&format!("Function: {}", function))?;
     if let Some(ref parsed) = parsed_args {
         print_info(format!("Arguments: {}", parsed));
         output_writer.write(&format!("Arguments: {}", parsed))?;
     }
-    logging::log_execution_start(&args.function, parsed_args.as_deref());
+    logging::log_execution_start(function, parsed_args.as_deref());
 
     let mut executor = ContractExecutor::new(wasm_bytes.clone())?;
     executor.set_timeout(args.timeout);
@@ -376,13 +392,8 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
 
     let mut engine = DebuggerEngine::new(executor, args.breakpoint.clone());
 
-    // Server and remote modes are not yet implemented
-    if args.server {
-        return Err(DebuggerError::ExecutionError(
-            "Server mode not yet implemented in run command".to_string(),
-        )
-        .into());
-    }
+    // Server mode is handled at the beginning of the function
+    // Remote mode is not yet implemented
 
     if args.remote.is_some() {
         return Err(DebuggerError::ExecutionError(
@@ -406,7 +417,7 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
                 args.step_mode
             ));
             engine.start_instruction_stepping(step_mode)?;
-            run_instruction_stepping(&mut engine, &args.function, parsed_args.as_deref())?;
+            run_instruction_stepping(&mut engine, function, parsed_args.as_deref())?;
             return Ok(());
         }
     }
@@ -414,7 +425,7 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     print_info("\n--- Execution Start ---\n");
     output_writer.write("\n--- Execution Start ---\n")?;
     let storage_before = engine.executor().get_storage_snapshot()?;
-    let result = engine.execute(&args.function, parsed_args.as_deref())?;
+    let result = engine.execute(function, parsed_args.as_deref())?;
     let storage_after = engine.executor().get_storage_snapshot()?;
     print_success("\n--- Execution Complete ---\n");
     output_writer.write("\n--- Execution Complete ---\n")?;
@@ -426,7 +437,7 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     if let Some(test_path) = &args.generate_test {
         if let Some(record) = engine.executor().last_execution() {
             print_info(format!("\nGenerating unit test: {:?}", test_path));
-            let test_code = crate::codegen::TestGenerator::generate(record, &args.contract)?;
+            let test_code = crate::codegen::TestGenerator::generate(record, contract)?;
             crate::codegen::TestGenerator::write_to_file(test_path, &test_code, args.overwrite)?;
             print_success(format!(
                 "Unit test generated successfully at {:?}",
@@ -462,8 +473,8 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     if let Ok(manager) = HistoryManager::new() {
         let record = RunHistory {
             date: chrono::Utc::now().to_rfc3339(),
-            contract_hash: args.contract.to_string_lossy().to_string(),
-            function: args.function.clone(),
+            contract_hash: contract.to_string_lossy().to_string(),
+            function: function.clone(),
             cpu_used: budget.cpu_instructions,
             memory_used: budget.memory_bytes,
         };
@@ -681,8 +692,8 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
             json_events.unwrap_or_else(|| engine.executor().get_events().unwrap_or_default());
 
         let trace = build_execution_trace(
-            &args.function,
-            args.contract.to_string_lossy().as_ref(),
+            function,
+            contract.to_string_lossy().as_ref(),
             args_str,
             &storage_after,
             &result,
@@ -791,10 +802,11 @@ fn build_execution_trace(
 
 /// Execute run command in dry-run mode.
 fn run_dry_run(args: &RunArgs) -> Result<()> {
-    print_info(format!("[DRY RUN] Loading contract: {:?}", args.contract));
+    let contract = args.contract.as_ref().expect("contract is required for dry-run");
+    print_info(format!("[DRY RUN] Loading contract: {:?}", contract));
 
-    let wasm_file = crate::utils::wasm::load_wasm(&args.contract)
-        .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
+    let wasm_file = crate::utils::wasm::load_wasm(contract)
+        .with_context(|| format!("Failed to read WASM file: {:?}", contract))?;
     let wasm_bytes = wasm_file.bytes;
     let wasm_hash = wasm_file.sha256_hash;
 
