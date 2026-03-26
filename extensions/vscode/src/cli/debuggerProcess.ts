@@ -127,8 +127,8 @@ type DebugRequest =
   | { type: 'Continue' }
   | { type: 'Inspect' }
   | { type: 'GetStorage' }
-  | { type: 'SetBreakpoint'; function: string }
-  | { type: 'ClearBreakpoint'; function: string }
+  | { type: 'SetBreakpoint'; id?: string; function: string; condition?: string; hit_condition?: string; log_message?: string }
+  | { type: 'ClearBreakpoint'; id?: string; function?: string }
   | { type: 'ResolveSourceBreakpoints'; source_path: string; lines: number[]; exported_functions: string[] }
   | { type: 'Evaluate'; expression: string; frame_id?: number }
   | { type: 'Cancel' }
@@ -767,8 +767,8 @@ export class DebuggerProcess {
           }
           this.pendingRequests.delete(id);
           pending.cleanup();
-          pending.reject(new DebuggerTimeoutError(request.type, options.timeoutMs as number));
-        }, options.timeoutMs);
+          pending.reject(new DebuggerTimeoutError(request.type, timeoutMs));
+        }, timeoutMs);
       }
 
       if (options?.signal) {

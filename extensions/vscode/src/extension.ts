@@ -8,6 +8,11 @@ import {
 import { SorobanDebugAdapterDescriptorFactory } from './debug/adapter';
 import { LogManager } from './debug/logManager';
 import { SorobanLaunchProgressReporter } from './launchProgress';
+import {
+  fromQuickPickLabel,
+  runLaunchPreflightCommand,
+  toQuickPickLabel
+} from './preflightCommand';
 
 type SorobanLaunchConfig = vscode.DebugConfiguration & DebuggerProcessConfig;
 const RUN_LAUNCH_PREFLIGHT_COMMAND = 'soroban-debugger.runLaunchPreflight';
@@ -34,7 +39,7 @@ class SorobanDebugConfigurationProvider implements vscode.DebugConfigurationProv
       return config;
     }
 
-    await showPreflightIssueAndApplyFix(preflight.issues[0], folder);
+    await showPreflightIssueAndApplyFix(preflight.issues[0], folder, config.name);
 
     return undefined;
   }
@@ -162,13 +167,15 @@ async function runStandaloneLaunchPreflight(): Promise<void> {
     showInformationMessage: async (message, ...actions) => vscode.window.showInformationMessage(message, ...actions),
     showWarningMessage: async (message, ...actions) => vscode.window.showWarningMessage(message, ...actions),
     showErrorMessage: async (message, ...actions) => vscode.window.showErrorMessage(message, ...actions),
-    applyQuickFix: async (quickFix, folder) => applyQuickFix(quickFix, folder as vscode.WorkspaceFolder | undefined)
+    applyQuickFix: async (quickFix, folder, configName, field) =>
+      applyQuickFix(quickFix, folder as vscode.WorkspaceFolder | undefined, configName, field)
   });
 }
 
 async function showPreflightIssueAndApplyFix(
   issue: LaunchPreflightIssue,
-  folder: vscode.WorkspaceFolder | undefined
+  folder: vscode.WorkspaceFolder | undefined,
+  configName?: string
 ): Promise<void> {
   const actions = issue.quickFixes.map(toQuickPickLabel);
   const selected = await vscode.window.showErrorMessage(
@@ -177,23 +184,25 @@ async function showPreflightIssueAndApplyFix(
   );
   const quickFix = fromQuickPickLabel(selected);
   if (quickFix) {
-    await applyQuickFix(quickFix, folder);
+    await applyQuickFix(quickFix, folder, configName, issue.field);
   }
 }
 
 async function applyQuickFix(
   quickFix: LaunchPreflightQuickFix,
-  folder: vscode.WorkspaceFolder | undefined
+  folder: vscode.WorkspaceFolder | undefined,
+  configName?: string,
+  field?: string
 ): Promise<void> {
   switch (quickFix) {
     case 'pickBinary':
-      await pickFile('Select soroban-debug binary', ['exe', 'bin', '']);
+      await pickFile('Select soroban-debug binary', ['exe', 'bin', ''], folder, configName, field);
       return;
     case 'pickContract':
-      await pickFile('Select Soroban contract WASM', ['wasm']);
+      await pickFile('Select Soroban contract WASM', ['wasm'], folder, configName, field);
       return;
     case 'pickSnapshot':
-      await pickFile('Select snapshot JSON', ['json']);
+      await pickFile('Select snapshot JSON', ['json'], folder, configName, field);
       return;
     case 'openLaunchConfig':
       await vscode.commands.executeCommand('workbench.action.debug.configure');
@@ -209,7 +218,13 @@ async function applyQuickFix(
   }
 }
 
-async function pickFile(title: string, extensions: string[]): Promise<void> {
+async function pickFile(
+  title: string,
+  extensions: string[],
+  folder: vscode.WorkspaceFolder | undefined,
+  configName?: string,
+  field?: string
+): Promise<void> {
   const filters = extensions.filter((ext) => ext.length > 0);
   const selected = await vscode.window.showOpenDialog({
     canSelectFiles: true,
@@ -220,14 +235,63 @@ async function pickFile(title: string, extensions: string[]): Promise<void> {
   });
 
   if (selected && selected.length > 0) {
-    await vscode.env.clipboard.writeText(selected[0].fsPath);
+    const filePath = selected[0].fsPath;
+
+    if (configName && field) {
+      const choice = await vscode.window.showInformationMessage(
+        `Selected path: ${filePath}. Do you want to update "${configName}" in launch.json directly?`,
+        'Update launch.json',
+        'Copy to Clipboard'
+      );
+
+      if (choice === 'Update launch.json') {
+        await patchLaunchConfig(folder, configName, field, filePath);
+        await vscode.window.showInformationMessage(`Updated ${field} in "${configName}" launch configuration.`);
+        return;
+      }
+    }
+
+    await vscode.env.clipboard.writeText(filePath);
     await vscode.window.showInformationMessage(
-      `Selected path copied to clipboard: ${selected[0].fsPath}`,
+      `Selected path copied to clipboard: ${filePath}`,
       'Open launch.json'
     ).then(async (choice) => {
       if (choice === 'Open launch.json') {
         await vscode.commands.executeCommand('workbench.action.debug.configure');
       }
     });
+  }
+}
+
+async function patchLaunchConfig(
+  folder: vscode.WorkspaceFolder | undefined,
+  configName: string,
+  field: string,
+  value: any
+): Promise<void> {
+  const settings = vscode.workspace.getConfiguration('launch', folder);
+  const configurations = settings.get<any[]>('configurations') || [];
+  const index = configurations.findIndex((c) => c.name === configName);
+
+  if (index !== -1) {
+    const updatedConfigurations = [...configurations];
+    updatedConfigurations[index] = {
+      ...updatedConfigurations[index],
+      [field]: value
+    };
+    await settings.update('configurations', updatedConfigurations, vscode.ConfigurationTarget.WorkspaceFolder);
+  } else {
+    // If not found in workspace folder, try global (though usually it should be in workspace folder for debugging)
+    const globalSettings = vscode.workspace.getConfiguration('launch');
+    const globalConfigs = globalSettings.get<any[]>('configurations') || [];
+    const globalIndex = globalConfigs.findIndex((c) => c.name === configName);
+    if (globalIndex !== -1) {
+      const updatedGlobalConfigs = [...globalConfigs];
+      updatedGlobalConfigs[globalIndex] = {
+        ...updatedGlobalConfigs[globalIndex],
+        [field]: value
+      };
+      await globalSettings.update('configurations', updatedGlobalConfigs, vscode.ConfigurationTarget.Workspace);
+    }
   }
 }
